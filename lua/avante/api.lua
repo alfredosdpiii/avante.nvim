@@ -20,6 +20,26 @@ function M.switch_selector_provider(target_provider)
   })
 end
 
+---@param model_name string
+function M.set_architect_model(model_name)
+  -- Override the architect model for multi-agent workflows
+  -- Override architect model flag and set provider model accordingly
+  local cfg = require("avante.config")
+  local prov = cfg.provider
+  cfg.override({ behaviour = { architect_model = model_name }, [prov] = { model = model_name } })
+  require("avante.utils").info("Architect model set to " .. model_name, { title = "Avante" })
+end
+
+---@param model_name string
+function M.set_coder_model(model_name)
+  -- Override the coder model for multi-agent workflows
+  -- Override coder model flag and set provider model accordingly
+  local cfg = require("avante.config")
+  local prov = cfg.provider
+  cfg.override({ behaviour = { coder_model = model_name }, [prov] = { model = model_name } })
+  require("avante.utils").info("Coder model set to " .. model_name, { title = "Avante" })
+end
+
 ---@param target avante.ProviderName
 function M.switch_provider(target) require("avante.providers").refresh(target) end
 

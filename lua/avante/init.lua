@@ -439,6 +439,13 @@ function M.setup(opts)
 
   -- setup helpers
   H.autocmds()
+  -- User commands for multi-agent model configuration
+  vim.api.nvim_create_user_command("AvanteArchitect", function(opts)
+    require("avante.api").set_architect_model(opts.args)
+  end, { nargs = 1, desc = "Set Avante multi-agent architect model" })
+  vim.api.nvim_create_user_command("AvanteCoder", function(opts)
+    require("avante.api").set_coder_model(opts.args)
+  end, { nargs = 1, desc = "Set Avante multi-agent coder model" })
   H.keymaps()
   H.signs()
 

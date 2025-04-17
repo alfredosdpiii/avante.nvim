@@ -370,6 +370,14 @@ M._defaults = {
   ---8. minimize_diff                   : Whether to remove unchanged lines when applying a code block
   ---9. enable_token_counting           : Whether to enable token counting. Default to true.
   behaviour = {
+    -- Enable multi-agent Architect→Coder pipeline
+    multi_agent = false,
+    -- Default models for multi-agent workflow
+    architect_model = "openai/o4-mini",
+    coder_model     = "openai/gpt-4.1",
+    -- System prompts for multi-agent workflow
+    architect_system_prompt = "You are a principal software engineer with vast expertise. Given the user's request, directly generate a complete code implementation in Avante's Markdown format, including filepaths and code blocks. Include inline comments only as needed. The Coder agent will then review and apply your implementation precisely.",
+    coder_system_prompt     = "You are a senior software engineer focused on precise edits. Use Avante's prompt format to output updatable code blocks that can be accepted or applied.",
     auto_focus_sidebar = true,
     auto_suggestions = false, -- Experimental stage
     auto_suggestions_respect_ignore = false,
