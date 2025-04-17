@@ -945,14 +945,17 @@ local function parse_codeblocks(buf, current_filepath, current_filetype)
     elseif node:type() == "fenced_code_block_delimiter" and start_line ~= nil and node:start() >= start_line then
       local end_line, _ = node:start()
       if Config.behaviour.enable_cursor_planning_mode then
+        -- planning mode: code blocks tied to replace annotations
         local filepath = obtain_filepath_from_codeblock(lines, start_line)
         if not filepath and lang == current_filetype then filepath = current_filepath end
-        valid = filepath ~= nil
+        valid = (filepath ~= nil)
       else
-        valid = lines[start_line - 1]:match("^%s*(%d*)[%.%)%s]*[Aa]?n?d?%s*[Rr]eplace%s+[Ll]ines:?%s*(%d+)%-(%d+)")
-          ~= nil
+        -- non-planning mode: accept all fenced code blocks
+        valid = true
       end
-      if valid then table.insert(codeblocks, { start_line = start_line, end_line = end_line + 1, lang = lang }) end
+      if valid then
+        table.insert(codeblocks, { start_line = start_line, end_line = end_line + 1, lang = lang })
+      end
     end
   end
 
@@ -1041,17 +1044,19 @@ end
 
 ---@param current_cursor boolean
 function Sidebar:apply(current_cursor)
+  -- default apply logic
   local buf_path = api.nvim_buf_get_name(self.code.bufnr)
   local current_filepath = Utils.file.is_in_cwd(buf_path) and Utils.relative_path(buf_path) or buf_path
   local current_filetype = Utils.get_filetype(current_filepath)
 
   local response, response_start_line = self:get_content_between_separators()
-  local all_snippets_map = Config.behaviour.enable_cursor_planning_mode
+  -- Choose snippet extraction: use planning mode or multi-agent to parse generic code blocks
+  local use_planning = Config.behaviour.enable_cursor_planning_mode or Config.behaviour.multi_agent
+  local all_snippets_map = use_planning
       and extract_cursor_planning_code_snippets_map(response, current_filepath, current_filetype)
-    or extract_code_snippets_map(response)
-  if not Config.behaviour.enable_cursor_planning_mode then
-    all_snippets_map = ensure_snippets_no_overlap(all_snippets_map)
-  end
+      or extract_code_snippets_map(response)
+  -- In non-planning (and non-multi-agent) mode, remove overlaps
+  if not use_planning then all_snippets_map = ensure_snippets_no_overlap(all_snippets_map) end
   local selected_snippets_map = {}
   if current_cursor then
     if self.result_container and self.result_container.winid then
@@ -2555,34 +2560,26 @@ function Sidebar:create_input_container(opts)
         Config.override({ [prov] = { model = coder_model } })
         local timestamp_c = get_timestamp()
         local prefix_c = render_chat_record_prefix(timestamp_c, prov, coder_model, arch_resp, sel_files, sel_code)
-        -- Begin coder phase: open code fence after generating prefix
-        self:update_content(prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. generating_text .. "```\n")
+        -- Begin coder phase header
+        self:update_content(prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. generating_text)
         local coder_resp = ""
         local function on_chunk_coder(chunk)
           coder_resp = coder_resp .. chunk
-          -- Stream code inside markdown fence
-          self:update_content(prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. "```\n" .. coder_resp)
+          -- Stream code chunks directly
+          self:update_content(prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. coder_resp)
         end
         local function on_stop_coder(stop2)
         if stop2.error then
-          -- Close fence on error, then trigger codeblock binding
+          -- Show error then trigger codeblock binding
           self:update_content(
-            prefix_a .. arch_resp .. "\n\nError: " .. vim.inspect(stop2.error) .. "\n```",
-            {
-              callback = function()
-                api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN })
-              end
-            }
+            prefix_a .. arch_resp .. "\n\nError: " .. vim.inspect(stop2.error),
+            { callback = function() api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN }) end }
           )
         else
-          -- Close fence after final code, then trigger codeblock binding
+          -- Show final code then trigger codeblock binding
           self:update_content(
-            prefix_a .. arch_resp .. "\n\n**Generation complete!**\n" .. prefix_c .. "```\n" .. coder_resp .. "\n```",
-            {
-              callback = function()
-                api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN })
-              end
-            }
+            prefix_a .. arch_resp .. "\n\n**Generation complete!**\n" .. prefix_c .. coder_resp,
+            { callback = function() api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN }) end }
           )
         end
         end
