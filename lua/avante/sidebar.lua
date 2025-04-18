@@ -584,7 +584,8 @@ end
 ---@return boolean skip_next_line
 local function obtain_filepath_from_codeblock(lines, line_number)
   local line = lines[line_number]
-  local filepath = line:match("^%s*```%w+:(.+)$")
+  -- support both colon and slash separators for language and path
+  local filepath = line:match("^%s*```%w+:(.+)$") or line:match("^%s*```%w+/(.+)$")
   if not filepath then
     local next_line = lines[line_number + 1]
     if next_line then
@@ -664,20 +665,9 @@ local function extract_cursor_planning_code_snippets_map(response_content, curre
     elseif node:type() == "fenced_code_block_delimiter" and start_line ~= nil and node:start() >= start_line then
       local end_line, _ = node:start()
       local filepath, skip_next_line = obtain_filepath_from_codeblock(lines, start_line)
-      if filepath == nil or filepath == "" then
-        if lang == current_filetype then
-          filepath = current_filepath
-        else
-          Utils.warn(
-            string.format(
-              "Failed to parse filepath from code block, and current_filetype `%s` is not the same as the filetype `%s` of the current code block, so ignore this code block",
-              current_filetype,
-              lang
-            )
-          )
-          lang = "unknown"
-          goto continue
-        end
+      -- Ensure a filepath: fallback to current file
+      if not filepath or filepath == "" then
+        filepath = current_filepath
       end
       if skip_next_line then start_line = start_line + 1 end
       local this_content = table.concat(vim.list_slice(lines, start_line + 1, end_line), "\n")
