@@ -57,6 +57,7 @@ from models.resource import Resource
 from pydantic import BaseModel, Field
 from services.indexing_history import indexing_history_service
 from services.resource import resource_service
+from services.graphdb_service import graphdb_service
 from tree_sitter_language_pack import SupportedLanguage, get_parser
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -166,6 +167,20 @@ app = FastAPI(
     lifespan=lifespan,
     redoc_url="/redoc",
 )
+
+@app.post("/graphdb/index")
+async def index_graphdb(background_tasks: BackgroundTasks):
+    """Trigger AST graph indexing asynchronously."""
+    # Use current working directory as project root
+    project_root = os.getcwd()
+    background_tasks.add_task(graphdb_service.index_project, project_root)
+    return {"status": "graph_indexing_started", "project_root": project_root}
+
+@app.get("/graphdb/context")
+async def get_graphdb_context():
+    """Return the serialized AST graph context."""
+    ctx = graphdb_service.export_context()
+    return {"context": ctx}
 
 # Constants
 SIMILARITY_THRESHOLD = 0.95
