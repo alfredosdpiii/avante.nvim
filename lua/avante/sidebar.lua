@@ -2458,6 +2458,19 @@ function Sidebar:create_input_container(opts)
     local history_messages = Utils.history.entries_to_llm_messages(entries)
 
     local tools = vim.deepcopy(LLMTools.get_tools(request, history_messages))
+    -- Add web search tool if requested
+    if mentions.enable_web_search then
+      table.insert(tools, {
+        name = "web_search",
+        description = "Search the web",
+        func = function(input)
+          local res, err = require("avante.providers").search({ query = input.query })
+          return res, err
+        end,
+        param = { type = "table", fields = { { name = "query", description = "Search query", type = "string" } } },
+        returns = {},
+      })
+    end
     table.insert(tools, {
       name = "add_file_to_context",
       description = "Add a file to the context",
@@ -2538,7 +2551,68 @@ function Sidebar:create_input_container(opts)
 
   ---@param request string
   local function handle_submit(request)
-    -- GraphDB optimized import query when codebase selected
+    -- Preprocess special commands and mentions
+    local mentions = Utils.extract_mentions(request)
+    request = mentions.new_content
+    local arch_only  = mentions.enable_architect
+    local coder_only = mentions.enable_coder
+    local use_web    = mentions.enable_web_search
+
+    -- Architect-only: single Agent using architect_model
+    if arch_only and not coder_only then
+      local prov = Config.provider
+      local cfg  = Config.behaviour
+      Config.override({ [prov] = { model = cfg.architect_model } })
+      get_generate_prompts_options(request, false, function(opts)
+        opts.prompt_opts = { system_prompt = cfg.architect_system_prompt, messages = {} }
+        if use_web then
+          table.insert(opts.tools, {
+            name = "web_search",
+            description = "Use web search engine",
+            func = function(input)
+              local res = require("avante.providers").web_search(input.query)
+              return res, nil
+            end,
+            param = { type = "table", fields = { { name = "query", type = "string", description = "Search query" } } },
+            returns = {},
+          })
+        end
+        local function on_chunk(chunk) self:update_content(chunk) end
+        local function on_stop(stop_opts)
+          if stop_opts.error then self:update_content("Error: " .. vim.inspect(stop_opts.error)) end
+        end
+        Llm.stream(vim.tbl_deep_extend("force", opts, { on_chunk = on_chunk, on_stop = on_stop }))
+      end)
+      return
+    end
+
+    -- Coder-only: single Agent using coder_model
+    if coder_only and not arch_only then
+      local prov = Config.provider
+      local cfg  = Config.behaviour
+      Config.override({ [prov] = { model = cfg.coder_model } })
+      get_generate_prompts_options(request, false, function(opts)
+        opts.prompt_opts = { system_prompt = cfg.coder_system_prompt, messages = {} }
+        if use_web then
+          table.insert(opts.tools, {
+            name = "web_search",
+            description = "Use web search engine",
+            func = function(input)
+              local res = require("avante.providers").web_search(input.query)
+              return res, nil
+            end,
+            param = { type = "table", fields = { { name = "query", type = "string", description = "Search query" } } },
+            returns = {},
+          })
+        end
+        local function on_chunk(chunk) self:update_content(chunk) end
+        local function on_stop(stop_opts)
+          if stop_opts.error then self:update_content("Error: " .. vim.inspect(stop_opts.error)) end
+        end
+        Llm.stream(vim.tbl_deep_extend("force", opts, { on_chunk = on_chunk, on_stop = on_stop }))
+      end)
+      return
+    end
     do
       local sel = self.file_selector.selected_filepaths or {}
       if vim.tbl_contains(sel, "codebase") then
