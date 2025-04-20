@@ -9,6 +9,7 @@ Tools Usage Guide:
   - If the `rag_search` tool exists, prioritize using it to do the search!
   - If the `rag_search` tool exists, only use tools like `search_keyword` `search_files` `view` `list_files` etc when absolutely necessary!
   - Keep the `query` parameter of `rag_search` tool as concise as possible! Try to keep it within five English words!
+  - Use the `graph_imports` tool to find all files that import or require a given module or symbol when asked which files import or use it.
   - If you encounter a URL, prioritize using the `fetch` tool to obtain its content.
   - If you have information that you don't know, please proactively use the tools provided by users! Especially the `web_search` tool.
   - When available tools cannot meet the requirements, please try to use the `run_command` tool to solve the problem whenever possible.

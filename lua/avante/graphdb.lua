@@ -3,7 +3,7 @@ local Path = require("plenary.path")
 local scan = require("plenary.scandir")
 
 ---@class avante.GraphDB
-local M = { ready = false }
+local M = { ready = false, total_files = 0, processed_files = 0 }
 
 local function get_db_path()
   local state = vim.fn.stdpath("state") .. "/avante"
@@ -94,6 +94,9 @@ function M.index_project(project_root)
   -- chunked processing with batched SQL
   local idx = 1
   local total = #files
+  -- record total and reset processed count
+  M.total_files = total
+  M.processed_files = 0
   local pending_sql = {}
   local function flush_sql()
     if #pending_sql > 0 then
@@ -137,12 +140,16 @@ function M.index_project(project_root)
     end
     -- flush after batch
     flush_sql()
+    -- update processed count and show progress
+    M.processed_files = idx - 1
     if idx <= total then
+      Utils.info(string.format("GraphDB: indexed %d/%d files...", M.processed_files, total), { title = "AvanteGraphProgress" })
       vim.defer_fn(process_batch, 0)
     else
+      -- complete indexing
       finalize_db()
       M.ready = true
-      Utils.info("GraphDB: AST indexed in sqlite at " .. get_db_path(), { title = "Avante" })
+      Utils.info("GraphDB: AST indexing complete at " .. get_db_path(), { title = "Avante" })
     end
   end
   -- start async indexing

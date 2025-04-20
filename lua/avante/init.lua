@@ -449,6 +449,22 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("AvanteClearGraph", function()
     require("avante.graphdb").clear_cache()
   end, { nargs = 0, desc = "Clear cached AST graph database" })
+  -- Show GraphDB indexing status (ready/in progress)
+  vim.api.nvim_create_user_command("AvanteGraphProgress", function()
+    local GraphDB = require("avante.graphdb")
+    local processed = GraphDB.processed_files or 0
+    local total = GraphDB.total_files or 0
+    if GraphDB.ready then
+      Utils.info(string.format("GraphDB indexing is finished (%d/%d files)", processed, total), { title = "AvanteGraphProgress" })
+    else
+      Utils.info(string.format("GraphDB indexing in progress (%d/%d files)", processed, total), { title = "AvanteGraphProgress" })
+    end
+  end, { nargs = 0, desc = "Show GraphDB indexing status" })
+  -- kick off local GraphDB AST indexing automatically
+  vim.defer_fn(function()
+    Utils.info("Starting local GraphDB indexing...", { title = "AvanteGraphIndex" })
+    require("avante.graphdb").index_project(Utils.get_project_root())
+  end, 1000)
   H.keymaps()
   H.signs()
 

@@ -2418,23 +2418,20 @@ function Sidebar:create_input_container(opts)
     local mentions = Utils.extract_mentions(request)
     request = mentions.new_content
 
-    -- Determine project_context: codebase AST or repo map
+    -- Determine project_context: full AST context if requested or selected, else repo map
     local project_context = nil
-    if mentions.enable_project_context then
-      if vim.tbl_contains(self.file_selector.selected_filepaths or {}, "codebase") then
-        -- fetch full AST context from RAG service
-        local ok, body = pcall(function()
-          local curl = require("plenary.curl")
-          local r = curl.get("http://localhost:8000/graphdb/context")
-          return (r and r.body) or ""
-        end)
-        if ok and body and #body > 0 then
-          local ok2, js = pcall(vim.json.decode, body)
-          if ok2 and js and js.context then project_context = js.context end
-        end
-      elseif file_ext then
-        project_context = RepoMap.get_repo_map(file_ext)
+    local use_ast = mentions.enable_project_context
+      or vim.tbl_contains(self.file_selector.selected_filepaths or {}, "codebase")
+    if use_ast then
+      -- get full AST context directly from GraphDB module
+      local ok, context = pcall(function()
+        return require("avante.graphdb").export_context()
+      end)
+      if ok and context and #context > 0 then
+        project_context = context
       end
+    elseif file_ext then
+      project_context = RepoMap.get_repo_map(file_ext)
     end
 
     local diagnostics = nil

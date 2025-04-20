@@ -514,6 +514,22 @@ function M.rag_search(opts, on_log)
   return vim.json.encode(resp), nil
 end
 
+---@type AvanteLLMToolFunc<{ module_name: string }>
+function M.graph_imports(opts, on_log)
+  if not opts.module_name or opts.module_name == "" then
+    return nil, "No module_name provided"
+  end
+  if on_log then on_log("Searching imports for: " .. opts.module_name) end
+  local ok, result = pcall(function()
+    return require("avante.graphdb").find_imports(opts.module_name)
+  end)
+  if not ok then
+    return nil, result
+  end
+  -- Encode the list of file paths as JSON
+  return vim.json.encode(result), nil
+end
+
 ---@type AvanteLLMToolFunc<{ code: string, rel_path: string, container_image?: string }>
 function M.python(opts, on_log, on_complete)
   local abs_path = Helpers.get_abs_path(opts.rel_path)
@@ -626,6 +642,21 @@ M._tools = {
         type = "string",
         optional = true,
       },
+    },
+  },
+  {
+    name = "graph_imports",
+    enabled = function() return true end,
+    description = "Find files that import or require a given module name via GraphDB AST index",
+    param = {
+      type = "table",
+      fields = {
+        { name = "module_name", description = "Module or identifier name to search imports for", type = "string" },
+      },
+    },
+    returns = {
+      { name = "result", description = "JSON array of file paths importing the module", type = "string" },
+      { name = "error", description = "Error message if the search failed", type = "string", optional = true },
     },
   },
   {
