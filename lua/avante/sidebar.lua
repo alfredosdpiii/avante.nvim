@@ -2533,8 +2533,19 @@ function Sidebar:create_input_container(opts)
           content = self.code.selection.content,
         }
       end
+      -- Collect selected files content for context
+      local sel_file_entries = self.file_selector:get_selected_files_contents()
+      local files_ctx = ""
+      if sel_file_entries and #sel_file_entries > 0 then
+        files_ctx = "Selected files:\n"
+        for _, file in ipairs(sel_file_entries) do
+          files_ctx = files_ctx .. "- " .. file.path .. ":\n" .. file.content .. "\n\n"
+        end
+      end
       -- Architect stage: use architect provider directly
       local arch_model = Config.get_provider_config(arch_provider).model
+      -- Prepare architect request including files context
+      local arch_request = files_ctx ~= "" and (files_ctx .. request) or request
       local timestamp_a = get_timestamp()
       local prefix_a = render_chat_record_prefix(
         timestamp_a,
@@ -2612,7 +2623,7 @@ function Sidebar:create_input_container(opts)
           provider = Provider[arch_provider],
           prompt_opts = {
             system_prompt = arch_sys,
-            messages = { { role = "user", content = request } },
+            messages = { { role = "user", content = arch_request } },
           },
           on_chunk = on_chunk_arch,
           on_stop = on_stop_arch,
