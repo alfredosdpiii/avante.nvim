@@ -2519,88 +2519,111 @@ function Sidebar:create_input_container(opts)
   local function handle_submit(request)
     -- Multi-agent flow: Architect then Coder
     if Config.behaviour.multi_agent then
-      -- Setup multi-agent models and their system prompts
-      local prov = Config.provider
       local cfg = Config.behaviour
-      local arch_model = cfg.architect_model
-      local coder_model = cfg.coder_model
+      local arch_provider = "architect"
+      local coder_provider = "coder"
       local arch_sys = cfg.architect_system_prompt
       local coder_sys = cfg.coder_system_prompt
-      -- Override to architect model
-      Config.override({ [prov] = { model = arch_model } })
-      -- Prepare prefixes and context
-      local timestamp_a = get_timestamp()
       local sel_files = self.file_selector:get_selected_filepaths()
       local sel_code = nil
       if self.code.selection then
-        sel_code = { path = self.code.selection.filepath, file_type = self.code.selection.filetype, content = self.code.selection.content }
+        sel_code = {
+          path = self.code.selection.filepath,
+          file_type = self.code.selection.filetype,
+          content = self.code.selection.content,
+        }
       end
-      local prefix_a = render_chat_record_prefix(timestamp_a, prov, arch_model, request, sel_files, sel_code)
-      -- Show architect start
+      -- Architect stage: use architect provider directly
+      local arch_model = Config.get_provider_config(arch_provider).model
+      local timestamp_a = get_timestamp()
+      local prefix_a = render_chat_record_prefix(
+        timestamp_a,
+        arch_provider,
+        arch_model,
+        request,
+        sel_files,
+        sel_code
+      )
       self:update_content("", { focus = true, scroll = false })
       self:update_content(prefix_a .. generating_text)
       local arch_resp = ""
-      -- Architect stream
       local function on_chunk_arch(chunk)
         arch_resp = arch_resp .. chunk
         self:update_content(prefix_a .. arch_resp)
       end
       local function on_stop_arch(stop_opts)
-        -- Prepare for coder
-        Config.override({ [prov] = { model = coder_model } })
+        -- Coder stage: use coder provider directly
+        local coder_model = Config.get_provider_config(coder_provider).model
         local timestamp_c = get_timestamp()
-        local prefix_c = render_chat_record_prefix(timestamp_c, prov, coder_model, arch_resp, sel_files, sel_code)
-        -- Begin coder phase header
-        self:update_content(prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. generating_text)
+        local prefix_c = render_chat_record_prefix(
+          timestamp_c,
+          coder_provider,
+          coder_model,
+          arch_resp,
+          sel_files,
+          sel_code
+        )
+        self:update_content(
+          prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. generating_text
+        )
         local coder_resp = ""
         local function on_chunk_coder(chunk)
           coder_resp = coder_resp .. chunk
-          -- Stream code chunks directly
-          self:update_content(prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. coder_resp)
+          self:update_content(
+            prefix_a .. arch_resp .. "\n\n**Coder Phase**\n" .. prefix_c .. coder_resp
+          )
         end
         local function on_stop_coder(stop2)
-        if stop2.error then
-          -- Show error then trigger codeblock binding
-          self:update_content(
-            prefix_a .. arch_resp .. "\n\nError: " .. vim.inspect(stop2.error),
-            { callback = function() api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN }) end }
-          )
-        else
-          -- Show final code then trigger codeblock binding
-          self:update_content(
-            prefix_a .. arch_resp .. "\n\n**Generation complete!**\n" .. prefix_c .. coder_resp,
-            { callback = function() api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN }) end }
-          )
+          if stop2.error then
+            self:update_content(
+              prefix_a .. arch_resp .. "\n\nError: " .. vim.inspect(stop2.error),
+              { callback = function()
+                  api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN })
+                end
+              }
+            )
+          else
+            self:update_content(
+              prefix_a .. arch_resp .. "\n\n**Generation complete!**\n" .. prefix_c .. coder_resp,
+              { callback = function()
+                  api.nvim_exec_autocmds("User", { pattern = VIEW_BUFFER_UPDATED_PATTERN })
+                end
+              }
+            )
+          end
         end
+        -- Coder stage: direct stream with system+user messages
+        do
+          local stream_c_opts = {
+            provider = Provider[coder_provider],
+            prompt_opts = {
+              system_prompt = coder_sys,
+              messages = { { role = "user", content = arch_resp } },
+            },
+            on_chunk = on_chunk_coder,
+            on_stop = on_stop_coder,
+          }
+          Llm.stream(stream_c_opts)
         end
-        -- Kick off coder stream with architect output as instructions
-        -- Kick off coder stream with architect output as context
-        get_generate_prompts_options(arch_resp, false, function(opts_c)
-          -- Inject coder system prompt for precise edits
-          opts_c.prompt_opts = { system_prompt = coder_sys, messages = {} }
-          -- Coder stream: execute plan
-          local stream_c = vim.tbl_deep_extend("force", opts_c, { on_chunk = on_chunk_coder, on_stop = on_stop_coder })
-          Llm.stream(stream_c)
-        end)
       end
-      -- Start architect stream with custom system prompt
-      get_generate_prompts_options(request, true, function(opts_a)
-        -- Inject architect system prompt for full implementation
-        opts_a.prompt_opts = { system_prompt = arch_sys, messages = {} }
-        -- Architect stream: generate code implementation
-        local stream_a = vim.tbl_deep_extend("force", opts_a, { on_chunk = on_chunk_arch, on_stop = on_stop_arch })
-        Llm.stream(stream_a)
-      end)
+      -- Architect stage: direct stream with system+user messages
+      do
+        local stream_a_opts = {
+          provider = Provider[arch_provider],
+          prompt_opts = {
+            system_prompt = arch_sys,
+            messages = { { role = "user", content = request } },
+          },
+          on_chunk = on_chunk_arch,
+          on_stop = on_stop_arch,
+        }
+        Llm.stream(stream_a_opts)
+      end
       return
     end
     if request:match("@codebase") and not vim.fn.expand("%:e") then
       self:update_content("Please open a file first before using @codebase", { focus = false, scroll = false })
       return
-    end
-    -- If multi-agent architect mode is enabled, override provider model to architect_model
-    if require("avante.config").behaviour.multi_agent then
-      local prov = require("avante.config").provider
-      require("avante.config").override({ [prov] = { model = require("avante.config").behaviour.architect_model } })
     end
 
     if request:sub(1, 1) == "/" then
