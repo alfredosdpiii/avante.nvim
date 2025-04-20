@@ -446,6 +446,9 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("AvanteCoder", function(opts)
     require("avante.api").set_coder_model(opts.args)
   end, { nargs = 1, desc = "Set Avante multi-agent coder model" })
+  vim.api.nvim_create_user_command("AvanteClearGraph", function()
+    require("avante.graphdb").clear_cache()
+  end, { nargs = 0, desc = "Clear cached AST graph database" })
   H.keymaps()
   H.signs()
 
@@ -482,6 +485,20 @@ function M.setup(opts)
   end
 
   if Config.rag_service.enabled then run_rag_service() end
+  -- Initialize or load persisted AST graphDB index
+  -- Remote GraphDB indexing via RAG service
+  vim.api.nvim_create_user_command("AvanteGraphIndex", function()
+    vim.fn.jobstart({"curl", "-s", "-XPOST", "http://localhost:8000/graphdb/index"}, { detach = true })
+    Utils.info("Triggered remote GraphDB indexing", { title = "Avante" })
+  end, { nargs = 0, desc = "Trigger GraphDB index on RAG service" })
+  -- Auto-index once on VimEnter
+  vim.api.nvim_create_autocmd("VimEnter", {
+    once = true,
+    callback = function()
+      vim.fn.jobstart({"curl", "-s", "-XPOST", "http://localhost:8000/graphdb/index"}, { detach = true })
+      Utils.info("Starting remote GraphDB indexing", { title = "Avante" })
+    end,
+  })
 
   local has_cmp, cmp = pcall(require, "cmp")
   if has_cmp then

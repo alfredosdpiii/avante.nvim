@@ -2418,7 +2418,24 @@ function Sidebar:create_input_container(opts)
     local mentions = Utils.extract_mentions(request)
     request = mentions.new_content
 
-    local project_context = mentions.enable_project_context and file_ext and RepoMap.get_repo_map(file_ext) or nil
+    -- Determine project_context: codebase AST or repo map
+    local project_context = nil
+    if mentions.enable_project_context then
+      if vim.tbl_contains(self.file_selector.selected_filepaths or {}, "codebase") then
+        -- fetch full AST context from RAG service
+        local ok, body = pcall(function()
+          local curl = require("plenary.curl")
+          local r = curl.get("http://localhost:8000/graphdb/context")
+          return (r and r.body) or ""
+        end)
+        if ok and body and #body > 0 then
+          local ok2, js = pcall(vim.json.decode, body)
+          if ok2 and js and js.context then project_context = js.context end
+        end
+      elseif file_ext then
+        project_context = RepoMap.get_repo_map(file_ext)
+      end
+    end
 
     local diagnostics = nil
     if mentions.enable_diagnostics then
@@ -2441,6 +2458,19 @@ function Sidebar:create_input_container(opts)
     local history_messages = Utils.history.entries_to_llm_messages(entries)
 
     local tools = vim.deepcopy(LLMTools.get_tools(request, history_messages))
+    -- Add web search tool if requested
+    if mentions.enable_web_search then
+      table.insert(tools, {
+        name = "web_search",
+        description = "Search the web",
+        func = function(input)
+          local res, err = require("avante.providers").search({ query = input.query })
+          return res, err
+        end,
+        param = { type = "table", fields = { { name = "query", description = "Search query", type = "string" } } },
+        returns = {},
+      })
+    end
     table.insert(tools, {
       name = "add_file_to_context",
       description = "Add a file to the context",
@@ -2477,6 +2507,10 @@ function Sidebar:create_input_container(opts)
     if Config.behaviour.enable_claude_text_editor_tool_mode then mode = "claude-text-editor-tool" end
 
     local selected_filepaths = self.file_selector.selected_filepaths or {}
+    -- Expand codebase selection into AST-index file list
+    if vim.tbl_contains(selected_filepaths, "codebase") then
+      selected_filepaths = require("avante.graphdb").get_filepaths()
+    end
 
     ---@type AvanteGeneratePromptsOptions
     local prompts_opts = {
@@ -2517,6 +2551,85 @@ function Sidebar:create_input_container(opts)
 
   ---@param request string
   local function handle_submit(request)
+    -- Preprocess special commands and mentions
+    local mentions = Utils.extract_mentions(request)
+    request = mentions.new_content
+    local arch_only  = mentions.enable_architect
+    local coder_only = mentions.enable_coder
+    local use_web    = mentions.enable_web_search
+
+    -- Architect-only: single Agent using architect_model
+    if arch_only and not coder_only then
+      local prov = Config.provider
+      local cfg  = Config.behaviour
+      Config.override({ [prov] = { model = cfg.architect_model } })
+      get_generate_prompts_options(request, false, function(opts)
+        opts.prompt_opts = { system_prompt = cfg.architect_system_prompt, messages = {} }
+        if use_web then
+          table.insert(opts.tools, {
+            name = "web_search",
+            description = "Use web search engine",
+            func = function(input)
+              local res = require("avante.providers").web_search(input.query)
+              return res, nil
+            end,
+            param = { type = "table", fields = { { name = "query", type = "string", description = "Search query" } } },
+            returns = {},
+          })
+        end
+        local function on_chunk(chunk) self:update_content(chunk) end
+        local function on_stop(stop_opts)
+          if stop_opts.error then self:update_content("Error: " .. vim.inspect(stop_opts.error)) end
+        end
+        Llm.stream(vim.tbl_deep_extend("force", opts, { on_chunk = on_chunk, on_stop = on_stop }))
+      end)
+      return
+    end
+
+    -- Coder-only: single Agent using coder_model
+    if coder_only and not arch_only then
+      local prov = Config.provider
+      local cfg  = Config.behaviour
+      Config.override({ [prov] = { model = cfg.coder_model } })
+      get_generate_prompts_options(request, false, function(opts)
+        opts.prompt_opts = { system_prompt = cfg.coder_system_prompt, messages = {} }
+        if use_web then
+          table.insert(opts.tools, {
+            name = "web_search",
+            description = "Use web search engine",
+            func = function(input)
+              local res = require("avante.providers").web_search(input.query)
+              return res, nil
+            end,
+            param = { type = "table", fields = { { name = "query", type = "string", description = "Search query" } } },
+            returns = {},
+          })
+        end
+        local function on_chunk(chunk) self:update_content(chunk) end
+        local function on_stop(stop_opts)
+          if stop_opts.error then self:update_content("Error: " .. vim.inspect(stop_opts.error)) end
+        end
+        Llm.stream(vim.tbl_deep_extend("force", opts, { on_chunk = on_chunk, on_stop = on_stop }))
+      end)
+      return
+    end
+    do
+      local sel = self.file_selector.selected_filepaths or {}
+      if vim.tbl_contains(sel, "codebase") then
+        -- extract module filename with extension
+        local mod = request:match("([%w_/]+%.[%w_]+)")
+        if mod then
+          local graphdb = require("avante.graphdb")
+          local files = graphdb.find_imports(mod)
+          if files and #files > 0 then
+            local resp = string.format("Module '%s' usages found in:\n", mod)
+            for i,f in ipairs(files) do resp = resp .. string.format("%d. %s\n", i, f) end
+            self:update_content(resp)
+            return
+          end
+        end
+      end
+    end
     -- Multi-agent flow: Architect then Coder
     if Config.behaviour.multi_agent then
       local cfg = Config.behaviour
@@ -3275,6 +3388,17 @@ function Sidebar:create_selected_files_container()
   if self.selected_files_container then self.selected_files_container:unmount() end
 
   local selected_filepaths = self.file_selector:get_selected_filepaths()
+  -- Filter out 'codebase' for display
+  local display_filepaths = {}
+  for _, fp in ipairs(selected_filepaths) do
+    if fp == "codebase" then
+      table.insert(display_filepaths, "[Codebase AST]")
+    else
+      table.insert(display_filepaths, fp)
+    end
+  end
+  local selected_filepaths = selected_filepaths
+  local selected_filepaths_display = display_filepaths
   if #selected_filepaths == 0 then
     self.file_selector:off("update")
     self.file_selector:on("update", function() self:create_selected_files_container() end)
@@ -3316,8 +3440,8 @@ function Sidebar:create_selected_files_container()
     end
 
     local selected_filepaths_with_icon = {}
-    for _, filepath in ipairs(selected_filepaths_) do
-      local icon = Utils.file.get_file_icon(filepath)
+  for _, filepath in ipairs(selected_filepaths_display) do
+      local icon = (filepath == "[Codebase AST]") and "" or Utils.file.get_file_icon(filepath)
       table.insert(selected_filepaths_with_icon, string.format("%s %s", icon, filepath))
     end
 

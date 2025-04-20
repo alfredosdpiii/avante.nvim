@@ -899,15 +899,35 @@ function M.extract_mentions(content)
   local new_content = content
   local enable_project_context = false
   local enable_diagnostics = false
+  local enable_architect = false
+  local enable_coder = false
+  local enable_web_search = false
   if content:match("@codebase") then
     enable_project_context = true
-    new_content = content:gsub("@codebase", "")
+    new_content = new_content:gsub("@codebase", "")
   end
-  if content:match("@diagnostics") then enable_diagnostics = true end
+  if content:match("@diagnostics") then
+    enable_diagnostics = true
+  end
+  if content:match("@architect") then
+    enable_architect = true
+    new_content = new_content:gsub("@architect", "")
+  end
+  if content:match("@coder") then
+    enable_coder = true
+    new_content = new_content:gsub("@coder", "")
+  end
+  if content:match("@web") then
+    enable_web_search = true
+    new_content = new_content:gsub("@web", "")
+  end
   return {
     new_content = new_content,
     enable_project_context = enable_project_context,
     enable_diagnostics = enable_diagnostics,
+    enable_architect = enable_architect,
+    enable_coder = enable_coder,
+    enable_web_search = enable_web_search,
   }
 end
 

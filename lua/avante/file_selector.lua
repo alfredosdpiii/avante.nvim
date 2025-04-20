@@ -60,6 +60,41 @@ function FileSelector:handle_path_selection(selected_paths)
   self:emit("update")
 end
 
+--- Handle codebase selection via graphdb AST indexing
+function FileSelector:handle_codebase_selection()
+  -- Mark codebase selected and index project AST
+  -- Add codebase marker to existing selections
+  if not vim.tbl_contains(self.selected_filepaths, "codebase") then
+    table.insert(self.selected_filepaths, 1, "codebase")
+  end
+  -- graphdb indexing occurs asynchronously on startup
+  self:emit("update")
+end
+ 
+--- Handle architect-only mode toggle
+function FileSelector:handle_architect_selection()
+  if not vim.tbl_contains(self.selected_filepaths, "architect") then
+    table.insert(self.selected_filepaths, 1, "architect")
+  end
+  self:emit("update")
+end
+
+--- Handle coder-only mode toggle
+function FileSelector:handle_coder_selection()
+  if not vim.tbl_contains(self.selected_filepaths, "coder") then
+    table.insert(self.selected_filepaths, 1, "coder")
+  end
+  self:emit("update")
+end
+
+--- Handle web-search toggle
+function FileSelector:handle_web_selection()
+  if not vim.tbl_contains(self.selected_filepaths, "web") then
+    table.insert(self.selected_filepaths, 1, "web")
+  end
+  self:emit("update")
+end
+
 local function get_project_filepaths()
   local project_root = Utils.get_project_root()
   local files = Utils.scan_directory({ directory = project_root, add_dirs = true })
@@ -212,47 +247,87 @@ function FileSelector:show_selector_ui()
     if Config.file_selector.provider ~= nil then
       Utils.warn("config.file_selector is deprecated, please use config.selector instead!")
       if type(Config.file_selector.provider) == "function" then
-        local title = string.format("%s:", PROMPT_TITLE) ---@type string
-        local filepaths = self:get_filepaths() ---@type string[]
-        local params = { title = title, filepaths = filepaths, handler = handler } ---@type avante.file_selector.IParams
+        local title = string.format("%s:", PROMPT_TITLE)
+        local filepaths = self:get_filepaths()
+        -- Define items with codebase option
+        local items = {
+          { id = "codebase",   title = "[Codebase] Full codebase AST" },
+          { id = "architect",  title = "[Architect] Architect Only" },
+          { id = "coder",      title = "[Coder] Coder Only" },
+          { id = "web",        title = "[Web] Enable Web Search" },
+        }
+        for _, fp in ipairs(filepaths) do table.insert(items, { id = fp, title = fp }) end
+        local params = { title = title, filepaths = items, handler = function(ids)
+          -- Normalize to list
+          local list = type(ids) == "table" and ids or { ids }
+          for _, id in ipairs(list) do
+            if id == "codebase" then return self:handle_codebase_selection() end
+            if id == "architect" then return self:handle_architect_selection() end
+            if id == "coder" then return self:handle_coder_selection() end
+            if id == "web" then return self:handle_web_selection() end
+          end
+          handler(ids)
+        end }
         Config.file_selector.provider(params)
       else
-        ---@type avante.SelectorProvider
-        local provider = "native"
-        if Config.file_selector.provider == "native" then
-          provider = "native"
-        elseif Config.file_selector.provider == "fzf" then
-          provider = "fzf_lua"
-        elseif Config.file_selector.provider == "mini.pick" then
-          provider = "mini_pick"
-        elseif Config.file_selector.provider == "snacks" then
-          provider = "snacks"
-        elseif Config.file_selector.provider == "telescope" then
-          provider = "telescope"
-        elseif type(Config.file_selector.provider) == "function" then
-          provider = Config.file_selector.provider
-        end
+        local provider = (Config.file_selector.provider == "fzf" and "fzf_lua")
+          or (Config.file_selector.provider == "mini.pick" and "mini_pick")
+          or (Config.file_selector.provider == "snacks" and "snacks")
+          or (Config.file_selector.provider == "telescope" and "telescope")
+          or "native"
         ---@cast provider avante.SelectorProvider
+        -- Build items list including codebase
+        local filepaths = self:get_filepaths()
+        local items = {{ id = "codebase", title = "[Codebase] Full codebase AST" }}
+        for _, fp in ipairs(filepaths) do table.insert(items, { id = fp, title = fp }) end
         local selector = Selector:new({
           provider = provider,
           title = PROMPT_TITLE,
-          items = vim.tbl_map(function(filepath) return { id = filepath, title = filepath } end, self:get_filepaths()),
+          items = items,
           default_item_id = self.selected_filepaths[1],
           selected_item_ids = self.selected_filepaths,
           provider_opts = Config.file_selector.provider_opts,
-          on_select = function(item_ids) self:handle_path_selection(item_ids) end,
+          on_select = function(item_ids)
+            -- ensure list
+            local ids = type(item_ids) == "table" and item_ids or { item_ids }
+            for _, id in ipairs(ids) do
+              if id == "codebase" then return self:handle_codebase_selection() end
+              if id == "architect" then return self:handle_architect_selection() end
+              if id == "coder" then return self:handle_coder_selection() end
+              if id == "web" then return self:handle_web_selection() end
+            end
+            self:handle_path_selection(ids)
+          end,
         })
         selector:open()
       end
     else
+      -- Build items list including special commands
+      local filepaths = self:get_filepaths()
+      local items = {
+        { id = "codebase",  title = "[Codebase] Full codebase AST" },
+        { id = "architect", title = "[Architect] Architect Only" },
+        { id = "coder",     title = "[Coder] Coder Only" },
+        { id = "web",       title = "[Web] Enable Web Search" },
+      }
+      for _, fp in ipairs(filepaths) do table.insert(items, { id = fp, title = fp }) end
       local selector = Selector:new({
         provider = Config.selector.provider,
         title = PROMPT_TITLE,
-        items = vim.tbl_map(function(filepath) return { id = filepath, title = filepath } end, self:get_filepaths()),
+        items = items,
         default_item_id = self.selected_filepaths[1],
         selected_item_ids = self.selected_filepaths,
         provider_opts = Config.selector.provider_opts,
-        on_select = function(item_ids) self:handle_path_selection(item_ids) end,
+        on_select = function(item_ids)
+          local ids = type(item_ids) == "table" and item_ids or { item_ids }
+          for _, id in ipairs(ids) do
+            if id == "codebase" then return self:handle_codebase_selection() end
+            if id == "architect" then return self:handle_architect_selection() end
+            if id == "coder" then return self:handle_coder_selection() end
+            if id == "web" then return self:handle_web_selection() end
+          end
+          self:handle_path_selection(ids)
+        end,
       })
       selector:open()
     end
@@ -286,6 +361,8 @@ end
 function FileSelector:get_selected_files_contents()
   local contents = {}
   for _, filepath in ipairs(self.selected_filepaths) do
+    -- skip special markers
+    if filepath == "codebase" or filepath == "architect" or filepath == "coder" or filepath == "web" then goto continue end
     local lines, error = Utils.read_file_from_buf_or_disk(filepath)
     lines = lines or {}
     local filetype = Utils.get_filetype(filepath)
@@ -295,6 +372,7 @@ function FileSelector:get_selected_files_contents()
       local content = table.concat(lines, "\n")
       table.insert(contents, { path = filepath, content = content, file_type = filetype })
     end
+    ::continue::
   end
   return contents
 end
